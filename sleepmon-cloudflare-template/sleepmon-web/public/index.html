@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SleepMon Dashboard</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header class="wrap">
+    <h1>SleepMon Dashboard</h1>
+    <p class="muted">Xem sự kiện SpO₂ thấp & tiếng ngáy (audio) từ hệ thống ESP32.</p>
+    <div class="row">
+      <label>API Base URL:</label>
+      <input id="apiBase" placeholder="https://sleepmon-api.<your>.workers.dev" />
+      <button id="save">Lưu</button>
+      <button id="refresh">Tải lại</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="card">
+      <h2>Sự kiện gần đây</h2>
+      <div id="status" class="muted"></div>
+      <div id="list" class="list"></div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+name = "sleepmon-api"
+main = "src/index.ts"
+compatibility_date = "2025-01-07"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sleepmon-db"
+database_id = "2ef2fa12-5778-4e5e-8253-4da23d5b01fa"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "sleepmon-audio"
