@@ -3,29 +3,88 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SleepMon Dashboard</title>
-  <link rel="stylesheet" href="./style.css" />
+  <title>SleepMon Dashboard (SpO2 + RMS)</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-  <header class="wrap">
-    <h1>SleepMon Dashboard</h1>
-    <p class="muted">Xem sự kiện SpO₂ thấp & tiếng ngáy (audio) từ hệ thống ESP32.</p>
-    <div class="row">
-      <label>API Base URL:</label>
-      <input id="apiBase" placeholder="https://sleepmon-api.<your>.workers.dev" />
-      <button id="save">Lưu</button>
-      <button id="refresh">Tải lại</button>
+  <header class="top">
+    <div>
+      <h1>SleepMon Dashboard</h1>
+      <p class="sub">Public read-only • Timezone: Asia/Ho_Chi_Minh (GMT+7)</p>
     </div>
   </header>
 
   <main class="wrap">
     <section class="card">
-      <h2>Sự kiện gần đây</h2>
-      <div id="status" class="muted"></div>
-      <div id="list" class="list"></div>
+      <h2>Kết nối API</h2>
+      <div class="row">
+        <label>API Base URL</label>
+        <input id="apiBase" type="url" placeholder="https://sleepmon-api.sleepmon-duytung.workers.dev" />
+        <button id="btnPing" class="btn">Ping</button>
+      </div>
+      <div class="muted" id="pingOut"></div>
     </section>
+
+    <section class="grid">
+      <div class="card">
+        <h2>Tín hiệu sống (Live)</h2>
+        <div class="row">
+          <button id="btnLive" class="btn">Bật Live</button>
+          <div class="muted" id="liveOut">—</div>
+        </div>
+        <p class="muted">Live lấy dữ liệu từ <code>/telemetry/latest</code> (mỗi 1s).</p>
+      </div>
+
+      <div class="card">
+        <h2>Lọc theo ngày</h2>
+        <div class="row">
+          <label>Ngày</label>
+          <input id="datePick" type="date" />
+          <button id="btnLoadDay" class="btn">Tải dữ liệu ngày</button>
+        </div>
+        <p class="muted">Dữ liệu trả về theo mốc thời gian local (GMT+7) nhưng lưu bằng epoch.</p>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h2>Biểu đồ SpO2</h2>
+        <canvas id="chartSpo2"></canvas>
+      </div>
+      <div class="card">
+        <h2>Biểu đồ RMS (mic)</h2>
+        <canvas id="chartRms"></canvas>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Abnormal audio (1–7 ngày)</h2>
+      <div class="row">
+        <label>Số ngày</label>
+        <select id="daysSel">
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+          <option value="6">6</option>
+          <option value="7" selected>7</option>
+        </select>
+        <button id="btnLoadAbn" class="btn">Tải danh sách Abnormal</button>
+      </div>
+      <div id="abnOut" class="list"></div>
+    </section>
+
+    <footer class="foot muted">
+      <p>
+        API endpoints dùng cho web:
+        <code>GET /health</code>, <code>GET /telemetry?date=YYYY-MM-DD</code>, <code>GET /telemetry/latest</code>,
+        <code>GET /abnormal?days=N</code>, <code>GET /audio/&lt;key&gt;</code>
+      </p>
+    </footer>
   </main>
 
-  <script src="./app.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
