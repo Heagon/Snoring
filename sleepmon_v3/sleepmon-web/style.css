@@ -1,0 +1,102 @@
+:root{
+  --bg:#0b0f17;
+  --card:#121a27;
+  --muted:#9fb0c3;
+  --text:#e8eef7;
+  --line:#22314a;
+  --ok:#3ddc97;
+  --warn:#ffcc00;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+.bar{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  padding:14px 16px;
+  border-bottom:1px solid var(--line);
+  position:sticky;
+  top:0;
+  background:rgba(11,15,23,0.9);
+  backdrop-filter: blur(10px);
+}
+.title{font-weight:800; font-size:18px;}
+.pill{
+  padding:6px 10px;
+  border:1px solid var(--line);
+  border-radius:999px;
+  font-size:12px;
+  color:var(--muted);
+}
+.container{max-width:1100px; margin:0 auto; padding:16px;}
+.card{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:14px;
+  margin-bottom:14px;
+}
+.grid2{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:14px;
+}
+@media (max-width: 900px){
+  .grid2{grid-template-columns:1fr}
+}
+.row{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  justify-content:space-between;
+}
+.row.right{justify-content:flex-end}
+.h{font-weight:700}
+.sub{color:var(--muted); font-size:12px; margin-top:4px;}
+.note{color:var(--muted); font-size:12px; margin-top:10px;}
+button, select{
+  background:#0e1522;
+  color:var(--text);
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:8px 10px;
+}
+button{cursor:pointer}
+button:hover{border-color:#2e4366}
+.datebox{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-top:10px;
+}
+.datechip{
+  border:1px solid var(--line);
+  border-radius:999px;
+  padding:7px 10px;
+  font-size:12px;
+  color:var(--muted);
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+.datechip input{transform: scale(1.1);}
+.toggle{display:flex; gap:8px; align-items:center; color:var(--muted); font-size:12px;}
+.chartFooter{color:var(--muted); font-size:12px; margin-top:8px; text-align:center;}
+.list{display:flex; flex-direction:column; gap:10px; margin-top:10px;}
+.item{
+  padding:10px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  display:grid;
+  grid-template-columns: 1fr auto;
+  gap:10px;
+}
+.item .meta{color:var(--muted); font-size:12px; margin-top:4px;}
+.item a{color:var(--ok); text-decoration:none}
+.item a:hover{text-decoration:underline}
+code{background:#0e1522; border:1px solid var(--line); padding:2px 6px; border-radius:8px;}
