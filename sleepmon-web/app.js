@@ -8,6 +8,152 @@ const { DateTime } = luxon;
 // ===== CHANGE THIS =====
 const API_BASE = "https://sleepmon-api.sleepmon.workers.dev";
 
+// ===== SMA1 (IMA-ADPCM) decoder =====
+// Container: 64B header ("SMA1") + blocks
+// Each block: predictor(int16 LE) + index(uint8) + reserved(uint8) + (blockSamples/2) bytes ADPCM nibbles
+const SMA1_INDEX_TABLE = [-1,-1,-1,-1, 2,4,6,8, -1,-1,-1,-1, 2,4,6,8];
+const SMA1_STEP_TABLE = [
+  7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,
+  97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,
+  658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,2499,2749,3024,
+  3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,10442,11487,12635,
+  13899,15289,16818,18500,20350,22385,24623,27086,29794,32767
+];
+
+function clamp16(v){
+  if (v > 32767) return 32767;
+  if (v < -32768) return -32768;
+  return v | 0;
+}
+
+function parseSma1Header(buf){
+  const dv = new DataView(buf);
+  const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+  if (magic !== "SMA1") throw new Error("Không phải file SMA1.");
+  const headerSize   = dv.getUint32(4, true);
+  const sampleRate   = dv.getUint32(8, true);
+  const blockSamples = dv.getUint32(12, true);
+  const totalSamples = dv.getUint32(16, true);
+  const startEpoch   = dv.getUint32(20, true);
+  const dataBytes    = dv.getUint32(24, true);
+  return { headerSize, sampleRate, blockSamples, totalSamples, startEpoch, dataBytes };
+}
+
+function imaDecodeNibble(nib, st){
+  const code = nib & 0x0F;
+  let step = SMA1_STEP_TABLE[st.index] || 7;
+  let diff = step >> 3;
+  if (code & 1) diff += step >> 2;
+  if (code & 2) diff += step >> 1;
+  if (code & 4) diff += step;
+  if (code & 8) diff = -diff;
+
+  st.predictor = clamp16(st.predictor + diff);
+  st.index += SMA1_INDEX_TABLE[code] || 0;
+  if (st.index < 0) st.index = 0;
+  if (st.index > 88) st.index = 88;
+
+  return st.predictor;
+}
+
+function decodeSma1ToPcm16(buf){
+  const u8 = new Uint8Array(buf);
+  const dv = new DataView(buf);
+  const h = parseSma1Header(buf);
+
+  const headerSize = (h.headerSize && h.headerSize >= 28) ? h.headerSize : 64;
+  const blockSamples = h.blockSamples | 0;
+  const bytesPerBlock = 4 + (blockSamples >> 1);
+
+  const pcm = new Int16Array(h.totalSamples);
+  let outPos = 0;
+
+  let off = headerSize;
+  const dataEnd = Math.min(u8.length, headerSize + (h.dataBytes || (u8.length - headerSize)));
+
+  while (off + 4 <= dataEnd && outPos < pcm.length){
+    const predictor = dv.getInt16(off, true);
+    const index = u8[off + 2] | 0;
+    // off+3 reserved
+    off += 4;
+
+    const st = { predictor, index };
+    pcm[outPos++] = predictor;
+
+    const bytes = Math.min((blockSamples >> 1), dataEnd - off);
+    for (let i = 0; i < bytes && outPos < pcm.length; i++){
+      const b = u8[off + i];
+      const lo = b & 0x0F;
+      const hi = (b >> 4) & 0x0F;
+
+      pcm[outPos++] = imaDecodeNibble(lo, st);
+      if (outPos < pcm.length) pcm[outPos++] = imaDecodeNibble(hi, st);
+    }
+    off += (blockSamples >> 1);
+
+    // If file is truncated, break safely
+    if (bytes < (blockSamples >> 1)) break;
+  }
+
+  return { pcm, info: h };
+}
+
+function pcm16ToWavBuffer(pcm, sampleRate){
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const blockAlign = numChannels * bitsPerSample / 8;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = pcm.length * 2;
+  const buf = new ArrayBuffer(44 + dataSize);
+  const dv = new DataView(buf);
+
+  function wrStr(off, s){
+    for (let i=0;i<s.length;i++) dv.setUint8(off+i, s.charCodeAt(i));
+  }
+
+  wrStr(0, "RIFF");
+  dv.setUint32(4, 36 + dataSize, true);
+  wrStr(8, "WAVE");
+  wrStr(12, "fmt ");
+  dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true); // PCM
+  dv.setUint16(22, numChannels, true);
+  dv.setUint32(24, sampleRate, true);
+  dv.setUint32(28, byteRate, true);
+  dv.setUint16(32, blockAlign, true);
+  dv.setUint16(34, bitsPerSample, true);
+  wrStr(36, "data");
+  dv.setUint32(40, dataSize, true);
+
+  let off = 44;
+  for (let i=0;i<pcm.length;i++,off+=2){
+    dv.setInt16(off, pcm[i], true);
+  }
+  return buf;
+}
+
+// cache: r2_key -> { wavUrl, wavBlob, info }
+const ABN_WAV_CACHE = new Map();
+
+async function getAbnWavUrl(it){
+  const key = it.r2_key;
+  if (ABN_WAV_CACHE.has(key)) return ABN_WAV_CACHE.get(key);
+
+  const smaUrl = API_BASE + "/abnormal/get?key=" + encodeURIComponent(key);
+  const res = await fetch(smaUrl);
+  if (!res.ok) throw new Error("Tải file SMA1 thất bại (HTTP " + res.status + ").");
+  const buf = await res.arrayBuffer();
+  const { pcm, info } = decodeSma1ToPcm16(buf);
+  const wavBuf = pcm16ToWavBuffer(pcm, info.sampleRate || 16000);
+  const wavBlob = new Blob([wavBuf], { type: "audio/wav" });
+  const wavUrl = URL.createObjectURL(wavBlob);
+
+  const pack = { wavUrl, wavBlob, info };
+  ABN_WAV_CACHE.set(key, pack);
+  return pack;
+}
+
+
 // UI refs
 const connPill = document.getElementById("connPill");
 const livePill = document.getElementById("livePill");
@@ -315,6 +461,7 @@ function renderAbn(items){
     abnList.textContent = "Không có file abnormal trong khoảng thời gian đã chọn.";
     return;
   }
+
   items.forEach(it => {
     const div = document.createElement("div");
     div.className = "item";
@@ -329,18 +476,87 @@ function renderAbn(items){
     left.appendChild(meta);
 
     const right = document.createElement("div");
-    const a = document.createElement("a");
-    a.href = API_BASE + "/abnormal/get?key=" + encodeURIComponent(it.r2_key);
-    a.target = "_blank";
-    a.textContent = "Mở / Tải";
+    right.style.display = "flex";
+    right.style.flexDirection = "column";
+    right.style.alignItems = "flex-end";
+    right.style.gap = "8px";
+
+    const status = document.createElement("div");
+    status.className = "meta";
+    status.textContent = "Chưa giải mã";
+
+    const btnRow = document.createElement("div");
+    btnRow.style.display = "flex";
+    btnRow.style.gap = "8px";
+
+    const playBtn = document.createElement("button");
+    playBtn.textContent = "Giải mã & Play";
+
+    const dlBtn = document.createElement("button");
+    dlBtn.textContent = "Tải WAV";
+
+    btnRow.appendChild(playBtn);
+    btnRow.appendChild(dlBtn);
+
     const audio = document.createElement("audio");
     audio.controls = true;
-    audio.src = a.href;
     audio.preload = "none";
     audio.style.width = "260px";
-    right.appendChild(a);
-    right.appendChild(document.createElement("div")).style.height = "6px";
+
+    const baseName = (it.filename || "abnormal").replace(/\.(sma|bin|dat)$/i, "");
+    const wavName = baseName + ".wav";
+
+    async function ensureDecoded(){
+      status.textContent = "Đang giải mã…";
+      playBtn.disabled = true;
+      dlBtn.disabled = true;
+      try{
+        const pack = await getAbnWavUrl(it);
+        audio.src = pack.wavUrl;
+        status.textContent = `OK • ${pack.info.sampleRate||""} Hz • ${pack.info.totalSamples||""} samples`;
+        return pack;
+      }catch(e){
+        console.error(e);
+        status.textContent = "Lỗi giải mã: " + (e && e.message ? e.message : e);
+        throw e;
+      }finally{
+        playBtn.disabled = false;
+        dlBtn.disabled = false;
+      }
+    }
+
+    playBtn.addEventListener("click", async () => {
+      try{
+        const pack = await ensureDecoded();
+        audio.currentTime = 0;
+        await audio.play();
+      }catch(_){}
+    });
+
+    dlBtn.addEventListener("click", async () => {
+      try{
+        const pack = await ensureDecoded();
+        const a = document.createElement("a");
+        a.href = pack.wavUrl;
+        a.download = wavName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }catch(_){}
+    });
+
+    // optional: keep raw download link (debug)
+    const raw = document.createElement("a");
+    raw.href = API_BASE + "/abnormal/get?key=" + encodeURIComponent(it.r2_key);
+    raw.target = "_blank";
+    raw.textContent = "Tải file gốc (.sma)";
+    raw.style.fontSize = "12px";
+    raw.style.color = "var(--muted)";
+
+    right.appendChild(btnRow);
     right.appendChild(audio);
+    right.appendChild(status);
+    right.appendChild(raw);
 
     div.appendChild(left);
     div.appendChild(right);
@@ -362,7 +578,7 @@ function renderAbnFiltered(){
   renderAbn(items);
 }
 
-async function loadAbn(){
+async async function loadAbn(){
   try{
     const res = await apiGet(`/abnormal/list?days=7`);
     setConn(true);
