@@ -100,28 +100,3 @@ button:hover{border-color:#2e4366}
 .item a{color:var(--ok); text-decoration:none}
 .item a:hover{text-decoration:underline}
 code{background:#0e1522; border:1px solid var(--line); padding:2px 6px; border-radius:8px;}
-
-
-/* Added in bundle */
-
-.input{
-  background: #0e1626;
-  border: 1px solid rgba(150, 180, 255, .18);
-  color: #e9f0ff;
-  border-radius: 10px;
-  padding: 10px 12px;
-  min-width: 240px;
-}
-.btn.small{ padding: 8px 10px; border-radius: 10px; font-size: 13px; }
-.muted{ opacity: .75; }
-.kv{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-.err{ color:#ffb3b3; }
-.ok{ color:#b3ffc9; }
-
-.abnList{ margin-top: 12px; display:flex; flex-direction:column; gap:10px; }
-.abnRow{ display:flex; flex-wrap:wrap; gap:10px; align-items:flex-start; justify-content:space-between;
-  padding:12px; border: 1px solid rgba(150,180,255,.14); border-radius: 14px; background: rgba(10,16,26,.35);
-}
-.abnMeta{ min-width: 260px; flex: 1; }
-.abnActions{ display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
-.chartWrap{ height: 260px; }

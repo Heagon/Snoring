@@ -18,7 +18,7 @@
       <div class="row">
         <div>
           <div class="h">Chọn ngày (tối đa 7 ngày gần nhất)</div>
-          <div class="sub">Chọn nhiều ngày để so sánh (tự tắt Live). Định dạng hiển thị: DD-MM-YYYY.</div>
+          <div class="sub">Chọn nhiều ngày để so sánh (tự tắt Live).</div>
         </div>
 
         <div class="row right">
@@ -26,54 +26,50 @@
             <input type="checkbox" id="liveToggle" />
             <span>Live</span>
           </label>
-          <button class="btn" id="reloadBtn">Tải lại</button>
+
+          <button id="reloadBtn">Tải lại</button>
         </div>
       </div>
 
       <div id="dateBox" class="datebox"></div>
-      <div id="modeNote" class="sub muted"></div>
+      <div class="note" id="modeNote"></div>
     </section>
 
     <section class="grid2">
       <section class="card">
         <div class="h">SpO2 (%)</div>
-        <div class="chartWrap">
-          <canvas id="spo2Chart"></canvas>
-          <div class="sub muted" id="spo2Fallback" style="display:none">Không tải được Chart.js → chỉ hiển thị danh sách, không vẽ được biểu đồ.</div>
-        </div>
+        <canvas id="spo2Chart" height="160"></canvas>
+        <div class="chartFooter" id="spo2DayLabel"></div>
       </section>
 
       <section class="card">
         <div class="h">Audio RMS</div>
-        <div class="chartWrap">
-          <canvas id="rmsChart"></canvas>
-          <div class="sub muted" id="rmsFallback" style="display:none">Không tải được Chart.js → chỉ hiển thị danh sách, không vẽ được biểu đồ.</div>
-        </div>
+        <canvas id="rmsChart" height="160"></canvas>
+        <div class="chartFooter" id="rmsDayLabel"></div>
       </section>
     </section>
 
     <section class="card">
-      <div class="h">Abnormal files (WAV)</div>
-      <div class="sub">Lưu tối đa 7 ngày trên cloud. (Danh sách sẽ lọc theo ngày bạn chọn ở trên.)</div>
-      <div id="abnList" class="abnList"></div>
+      <div class="row">
+        <div>
+          <div class="h">Abnormal files (WAV)</div>
+          <div class="sub">Lưu tối đa 7 ngày trên cloud. (Danh sách sẽ lọc theo ngày bạn chọn ở trên.)</div>
+        </div>
+      </div>
+
+      <div id="abnList" class="list"></div>
     </section>
 
     <section class="card">
       <div class="h">Cấu hình</div>
-      <div class="sub">Sửa <code>API_BASE</code> trong <code>app.js</code> thành domain Worker của bạn. Trang này public, nhưng POST lên API yêu cầu token.</div>
-
-      <div class="kv" style="margin-top:10px">
-        <div class="sub"><b>Bearer token (tuỳ chọn)</b></div>
-        <input class="input" id="tokenInput" placeholder="dán token Bearer của bạn (ESP32 đang dùng)" />
-        <button class="btn small" id="saveTokenBtn">Lưu token</button>
-        <button class="btn small" id="clearTokenBtn">Xoá</button>
-        <span class="sub muted" id="tokenHint"></span>
+      <div class="sub">
+        Sửa <code>API_BASE</code> trong <code>app.js</code> thành domain Worker của bạn.
+        Trang này public (ai cũng xem được), nhưng API ghi dữ liệu yêu cầu token.
       </div>
     </section>
   </main>
 
-  <!-- Chart.js (nếu bị chặn, web vẫn chạy nhưng không có đồ thị) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+
   <script src="./app.js"></script>
 </body>
 </html>
