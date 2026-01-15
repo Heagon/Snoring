@@ -578,7 +578,7 @@ function renderAbnFiltered(){
   renderAbn(items);
 }
 
-async async function loadAbn(){
+async function loadAbn(){
   try{
     const res = await apiGet(`/abnormal/list?days=7`);
     setConn(true);
