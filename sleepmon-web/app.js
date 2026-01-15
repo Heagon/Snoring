@@ -8,7 +8,7 @@
 "use strict";
 
 // ===== CHANGE THIS =====
-const API_BASE = "https://sleepmon-api.YOURNAME.workers.dev";
+const API_BASE = "https://sleepmon-api.sleepmon.workers.dev";
 // =======================
 
 const TZ = "Asia/Ho_Chi_Minh";
