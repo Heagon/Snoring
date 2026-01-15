@@ -6,7 +6,7 @@
 const { DateTime } = luxon;
 
 // ===== CHANGE THIS =====
-const API_BASE = "https://sleepmon-api.sleepmon.workers.dev";
+const API_BASE = "https://sleepmon-api.YOURNAME.workers.dev";
 
 // UI refs
 const connPill = document.getElementById("connPill");
@@ -30,6 +30,8 @@ let lastLiveTs = 0;
 // Abnormal cache (tối đa 7 ngày trên cloud)
 let abnAllItems = [];
 
+
+const wavCache = new Map(); // r2_key -> { url, blob }
 function fmtDayDisp(isoDate){
   // isoDate: YYYY-MM-DD
   return DateTime.fromISO(isoDate, { zone: TZ }).toFormat("dd-LL-yyyy");
@@ -109,6 +111,176 @@ async function apiGet(path){
   return await r.json();
 }
 
+
+async function apiGetArrayBuffer(path){
+  const r = await fetch(API_BASE + path, { method:"GET" });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return await r.arrayBuffer();
+}
+
+function toWavFilename(name){
+  if (!name) return "abnormal.wav";
+  let out = name.replace(/\.(sma|adpcm|bin)$/i, ".wav");
+  if (!out.toLowerCase().endsWith(".wav")) out = out + ".wav";
+  return out;
+}
+
+function isRiffWav(u8){
+  if (u8.length < 12) return false;
+  return u8[0]===0x52 && u8[1]===0x49 && u8[2]===0x46 && u8[3]===0x46 && // RIFF
+         u8[8]===0x57 && u8[9]===0x41 && u8[10]===0x56 && u8[11]===0x45;   // WAVE
+}
+
+// IMA-ADPCM tables (must match ESP32 encoder)
+const IMA_STEP_TABLE = [
+  7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,
+  97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,
+  724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,2499,2749,3024,3327,
+  3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,10442,11487,12635,13899,
+  15289,16818,18500,20350,22385,24623,27086,29794,32767
+];
+const IMA_INDEX_TABLE = [-1,-1,-1,-1, 2,4,6,8, -1,-1,-1,-1, 2,4,6,8];
+
+function clamp16(v){
+  if (v > 32767) return 32767;
+  if (v < -32768) return -32768;
+  return v|0;
+}
+
+function decodeImaNibble(code, state){
+  // state: { predictor, index }
+  let step = IMA_STEP_TABLE[state.index];
+  let diff = step >> 3;
+  if (code & 1) diff += step >> 2;
+  if (code & 2) diff += step >> 1;
+  if (code & 4) diff += step;
+
+  if (code & 8) state.predictor -= diff;
+  else state.predictor += diff;
+  state.predictor = clamp16(state.predictor);
+
+  state.index += IMA_INDEX_TABLE[code & 0x0F];
+  if (state.index < 0) state.index = 0;
+  if (state.index > 88) state.index = 88;
+
+  return state.predictor;
+}
+
+function sma1DecodeToPcm16(arrayBuffer){
+  const u8 = new Uint8Array(arrayBuffer);
+  if (u8.length < 64) return null;
+
+  // "SMA1"
+  if (!(u8[0]===0x53 && u8[1]===0x4D && u8[2]===0x41 && u8[3]===0x31)) return null;
+
+  const dv = new DataView(arrayBuffer);
+  const headerSize = dv.getUint32(4, true);
+  const sampleRate = dv.getUint32(8, true);
+  const blockSamples = dv.getUint32(12, true);
+  const totalSamples = dv.getUint32(16, true);
+  const startEpoch = dv.getUint32(20, true);
+  const dataBytes = dv.getUint32(24, true);
+
+  const blockBytes = 4 + (blockSamples / 2); // matches ESP: predictor(2)+index(1)+res(1)+payload
+  let off = headerSize;
+  const maxDataEnd = Math.min(u8.length, headerSize + dataBytes);
+
+  const out = new Int16Array(totalSamples);
+  let outPos = 0;
+
+  while (off + 4 <= maxDataEnd && outPos < totalSamples){
+    const predictor = new DataView(arrayBuffer, off, 2).getInt16(0, true);
+    const index = u8[off+2] & 0xFF;
+    // off+3 reserved
+    off += 4;
+
+    const state = { predictor, index: Math.min(88, index) };
+    // first sample of block
+    out[outPos++] = state.predictor;
+
+    const nibblesNeeded = Math.min(blockSamples - 1, totalSamples - outPos);
+    // read bytes containing packed nibbles
+    const bytesNeeded = Math.ceil(nibblesNeeded / 2);
+    const payloadEnd = Math.min(maxDataEnd, off + (blockBytes - 4));
+    const payloadAvail = Math.max(0, payloadEnd - off);
+    const bytesToRead = Math.min(bytesNeeded, payloadAvail);
+
+    for (let bi = 0; bi < bytesToRead && outPos < totalSamples; bi++){
+      const b = u8[off + bi];
+      // low nibble then high nibble (matches encoder packing)
+      const lo = b & 0x0F;
+      out[outPos++] = decodeImaNibble(lo, state);
+      if (outPos >= totalSamples) break;
+      if ((bi*2 + 1) >= nibblesNeeded) break;
+      const hi = (b >> 4) & 0x0F;
+      out[outPos++] = decodeImaNibble(hi, state);
+    }
+
+    // move to next block boundary (fixed size)
+    off = (off - 0) + (blockBytes - 4);
+  }
+
+  return { pcm: out, sampleRate, startEpoch };
+}
+
+function pcm16ToWavBlob(pcm16, sampleRate){
+  const dataBytes = pcm16.length * 2;
+  const header = new ArrayBuffer(44);
+  const dv = new DataView(header);
+
+  function writeFourCC(off, s){
+    dv.setUint8(off+0, s.charCodeAt(0));
+    dv.setUint8(off+1, s.charCodeAt(1));
+    dv.setUint8(off+2, s.charCodeAt(2));
+    dv.setUint8(off+3, s.charCodeAt(3));
+  }
+
+  writeFourCC(0, "RIFF");
+  dv.setUint32(4, 36 + dataBytes, true);
+  writeFourCC(8, "WAVE");
+
+  writeFourCC(12, "fmt ");
+  dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true);   // PCM
+  dv.setUint16(22, 1, true);   // mono
+  dv.setUint32(24, sampleRate, true);
+  dv.setUint32(28, sampleRate * 2, true); // byte rate
+  dv.setUint16(32, 2, true);   // block align
+  dv.setUint16(34, 16, true);  // bits
+
+  writeFourCC(36, "data");
+  dv.setUint32(40, dataBytes, true);
+
+  return new Blob([header, pcm16.buffer], { type: "audio/wav" });
+}
+
+async function getOrDecodeWav(it){
+  const key = it.r2_key || it.key || it.r2Key || it.r2 || "";
+  if (!key) throw new Error("Missing key");
+  if (wavCache.has(key)) return wavCache.get(key);
+
+  const ab = await apiGetArrayBuffer(`/abnormal/get?key=${encodeURIComponent(key)}`);
+  const u8 = new Uint8Array(ab);
+
+  let blob = null;
+  // If already WAV (RIFF), just use it
+  if (isRiffWav(u8)) {
+    blob = new Blob([ab], { type: "audio/wav" });
+  } else {
+    const decoded = sma1DecodeToPcm16(ab);
+    if (decoded && decoded.pcm) {
+      blob = pcm16ToWavBlob(decoded.pcm, decoded.sampleRate || 16000);
+    } else {
+      // Unknown; still make a blob so user can download/open
+      blob = new Blob([ab], { type: "application/octet-stream" });
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  const entry = { url, blob, key };
+  wavCache.set(key, entry);
+  return entry;
+}
 function stopLive(){
   if (liveTimer){ clearInterval(liveTimer); liveTimer = null; }
   setLivePill(false);
@@ -336,6 +508,7 @@ function renderAbn(items){
     abnList.textContent = "Không có file abnormal trong khoảng thời gian đã chọn.";
     return;
   }
+
   items.forEach(it => {
     const div = document.createElement("div");
     div.className = "item";
@@ -350,18 +523,83 @@ function renderAbn(items){
     left.appendChild(meta);
 
     const right = document.createElement("div");
-    const a = document.createElement("a");
-    a.href = API_BASE + "/abnormal/get?key=" + encodeURIComponent(it.r2_key);
-    a.target = "_blank";
-    a.textContent = "Mở / Tải";
+    right.style.display = "flex";
+    right.style.gap = "10px";
+    right.style.alignItems = "center";
+    right.style.flexWrap = "wrap";
+    right.style.justifyContent = "flex-end";
+
+    const key = it.r2_key || it.key || it.r2Key || it.r2 || "";
+
+    const rawLink = document.createElement("a");
+    rawLink.href = API_BASE + "/abnormal/get?key=" + encodeURIComponent(key);
+    rawLink.target = "_blank";
+    rawLink.textContent = "File gốc";
+
+    const playBtn = document.createElement("button");
+    playBtn.textContent = "Giải mã & Play";
+
+    const dlBtn = document.createElement("button");
+    dlBtn.textContent = "Tải WAV";
+    dlBtn.disabled = true;
+
     const audio = document.createElement("audio");
     audio.controls = true;
-    audio.src = a.href;
     audio.preload = "none";
     audio.style.width = "260px";
-    right.appendChild(a);
-    right.appendChild(document.createElement("div")).style.height = "6px";
+
+    const status = document.createElement("span");
+    status.className = "meta";
+    status.style.marginLeft = "6px";
+    status.textContent = "";
+
+    async function ensureDecoded(){
+      status.textContent = "Đang giải mã…";
+      try{
+        const entry = await getOrDecodeWav(it);
+        // If blob isn't wav, still allow open raw
+        if (entry.blob.type === "audio/wav"){
+          audio.src = entry.url;
+          dlBtn.disabled = false;
+          status.textContent = "OK";
+        } else {
+          status.textContent = "Không nhận dạng được SMA1/WAV";
+        }
+        setConn(true);
+        return entry;
+      }catch(e){
+        console.error(e);
+        setConn(false);
+        status.textContent = "Lỗi tải/giải mã";
+        throw e;
+      }
+    }
+
+    playBtn.addEventListener("click", async () => {
+      try{
+        await ensureDecoded();
+        if (audio.src) await audio.play();
+      }catch(_){}
+    });
+
+    dlBtn.addEventListener("click", async () => {
+      try{
+        const entry = wavCache.get(key) || await ensureDecoded();
+        if (!entry || !entry.url) return;
+        const a = document.createElement("a");
+        a.href = entry.url;
+        a.download = (it.filename || "abnormal").replace(/\.[^.]+$/,"") + ".wav";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }catch(_){}
+    });
+
+    right.appendChild(rawLink);
+    right.appendChild(playBtn);
+    right.appendChild(dlBtn);
     right.appendChild(audio);
+    right.appendChild(status);
 
     div.appendChild(left);
     div.appendChild(right);
