@@ -1,0 +1,15 @@
+{
+  "name": "sleepmon-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:apply:local": "wrangler d1 execute sleepmon-db --file=./schema.sql",
+    "db:apply:remote": "wrangler d1 execute sleepmon-db --remote --file=./schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4.57.0",
+    "typescript": "^5.5.4"
+  }
+}
