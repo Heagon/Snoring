@@ -1,639 +1,585 @@
-/* SleepMon web (public viewer)
-   - Live view: only when selecting exactly 1 day == today (Hanoi) and Live is ON
-   - Multi-day compare: select multiple days -> Live auto OFF
+/* SleepMon Web UI (v3) - Abnormal markers (no audio upload/decoding)
+   - Select 1..7 days
+   - Charts: SpO2 + RMS (today/live colors fixed)
+   - Abnormal: table of abnormal segments (filename) + checkboxes
+     -> checked rows show vertical lines (labeled by row index) on both charts
 */
 
+// ====== CONFIG ======
+const API_BASE = "https://sleepmon-api.sleepmon.workers.dev"; // change to your Worker domain
+const ZONE = "Asia/Ho_Chi_Minh";
+
+// Day palette: index 0 = today
+const DAY_COLORS = [
+  "#e53935", // today: red
+  "#43a047", // yesterday: green
+  "#1e88e5", // blue
+  "#fbc02d", // yellow
+  "#8e24aa", // purple
+  "#fb8c00", // orange
+  "#d81b60", // pink
+];
+
+// ====== DOM ======
+const elStatus   = document.getElementById("status");
+const elDateBox  = document.getElementById("dateBox");
+const elBtnRef   = document.getElementById("btnRefresh");
+
+const elLastTs   = document.getElementById("lastTs");
+const elSpo2Val  = document.getElementById("spo2Val");
+const elRmsVal   = document.getElementById("rmsVal");
+const elAlarmVal = document.getElementById("alarmVal");
+
+const elAbnList  = document.getElementById("abnList");
+
+// ====== STATE ======
+let selectedDates = [];        // display format DD-MM-YYYY
+let selectedIsoDays = [];      // ISO yyyy-LL-dd
+
+let latestPoint = null;
+let daysData = {};             // { isoDay: [ {ts,spo2,rms,alarmA} ... ] }
+
+let abnAllItems = [];          // from API: {key,ts,day,filename}
+const abnChecked = new Set();  // keys checked in UI
+const abnRowInfo = new Map();  // key -> { ts, day, idx }
+let abnVisibleKeys = [];
+
+let spo2Chart = null;
+let rmsChart  = null;
+
+// ====== UTILS ======
 const { DateTime } = luxon;
 
-// ===== CHANGE THIS =====
-const API_BASE = "https://sleepmon-api.sleepmon.workers.dev";
-
-// UI refs
-const connPill = document.getElementById("connPill");
-const livePill = document.getElementById("livePill");
-const dateBox  = document.getElementById("dateBox");
-const modeNote = document.getElementById("modeNote");
-const liveToggle = document.getElementById("liveToggle");
-const reloadBtn  = document.getElementById("reloadBtn");
-
-const spo2DayLabel = document.getElementById("spo2DayLabel");
-const rmsDayLabel  = document.getElementById("rmsDayLabel");
-
-const abnList = document.getElementById("abnList");
-
-const TZ = "Asia/Ho_Chi_Minh";
-
-let selectedDates = []; // ["YYYY-MM-DD", ...]
-let liveTimer = null;
-let lastLiveTs = 0;
-
-// Abnormal cache (tối đa 7 ngày trên cloud)
-let abnAllItems = [];
-
-
-const wavCache = new Map(); // r2_key -> { url, blob }
-function fmtDayDisp(isoDate){
-  // isoDate: YYYY-MM-DD
-  return DateTime.fromISO(isoDate, { zone: TZ }).toFormat("dd-LL-yyyy");
+function toDisplayDate(dt) {
+  return dt.toFormat("dd-LL-yyyy");
 }
 
-// Charts
-let spo2Chart, rmsChart;
-
-function hanoiTodayStr(){
-  return DateTime.now().setZone(TZ).toFormat("yyyy-LL-dd");
+function displayToIso(displayDDMMYYYY) {
+  const dt = DateTime.fromFormat(displayDDMMYYYY, "dd-LL-yyyy", { zone: ZONE });
+  if (!dt.isValid) return null;
+  return dt.toFormat("yyyy-LL-dd");
 }
 
-function last7Dates(){
-  const now = DateTime.now().setZone(TZ).startOf("day");
-  const out = [];
-  for (let i=0;i<7;i++){
-    out.push(now.minus({days:i}).toFormat("yyyy-LL-dd"));
-  }
-  return out;
+function isoToDisplay(isoDay) {
+  const dt = DateTime.fromFormat(isoDay, "yyyy-LL-dd", { zone: ZONE });
+  if (!dt.isValid) return isoDay;
+  return dt.toFormat("dd-LL-yyyy");
 }
 
-function setConn(ok){
-  connPill.textContent = ok ? "API: OK" : "API: chưa kết nối";
-  connPill.style.color = ok ? "var(--ok)" : "var(--muted)";
+function dayIndexFromIso(isoDay) {
+  const todayIso = DateTime.now().setZone(ZONE).toFormat("yyyy-LL-dd");
+  const d0 = DateTime.fromFormat(todayIso, "yyyy-LL-dd", { zone: ZONE });
+  const d1 = DateTime.fromFormat(isoDay, "yyyy-LL-dd", { zone: ZONE });
+  if (!d0.isValid || !d1.isValid) return 6;
+  const diff = Math.floor(d0.startOf("day").diff(d1.startOf("day"), "days").days);
+  return Math.max(0, Math.min(6, diff));
 }
 
-function setLivePill(on){
-  livePill.textContent = on ? "LIVE: ON" : "LIVE: OFF";
-  livePill.style.color = on ? "var(--warn)" : "var(--muted)";
+function colorForDay(isoDay) {
+  const idx = dayIndexFromIso(isoDay);
+  const base = DAY_COLORS[idx] || DAY_COLORS[6];
+  return { spo2: base, rms: base, base };
 }
 
-function selectionLabel(){
-  if (selectedDates.length === 0) return "Chưa chọn ngày";
-  if (selectedDates.length === 1) return "Ngày: " + fmtDayDisp(selectedDates[0]);
-  return "Ngày: " + selectedDates.map(fmtDayDisp).join(", ");
+function fmtTimeFromTs(tsSec) {
+  const dt = DateTime.fromSeconds(Number(tsSec), { zone: ZONE });
+  if (!dt.isValid) return "";
+  return dt.toFormat("HH:mm:ss");
 }
 
-function ensureCharts(){
-  const common = () => ({
-    responsive: true,
-    animation: false,
-    parsing: false,
-    scales: {
-      x: {
-        type: "time",
-        adapters: { date: { zone: TZ } },
-        time: { unit: "minute" },
-        ticks: { color: "#9fb0c3" },
-        grid: { color: "#22314a" }
-      },
-      y: {
-        ticks: { color: "#9fb0c3" },
-        grid: { color: "#22314a" }
+function setStatus(msg) {
+  elStatus.textContent = msg || "";
+}
+
+async function fetchJson(url) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+}
+
+// ====== CHART: vertical lines plugin ======
+const vlinesPlugin = {
+  id: "vlines",
+  afterDatasetsDraw(chart) {
+    const lines = chart?.options?.plugins?.vlines?.lines || [];
+    if (!lines.length) return;
+
+    const { ctx, chartArea } = chart;
+    const xScale = chart.scales.x;
+    if (!chartArea || !xScale) return;
+
+    ctx.save();
+
+    for (const ln of lines) {
+      const x = xScale.getPixelForValue(ln.x);
+      if (x < chartArea.left - 1 || x > chartArea.right + 1) continue;
+
+      ctx.strokeStyle = ln.color || "#ffffff";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, chartArea.top);
+      ctx.lineTo(x, chartArea.bottom);
+      ctx.stroke();
+
+      if (ln.label) {
+        ctx.fillStyle = ln.color || "#ffffff";
+        ctx.font = "12px system-ui";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText(String(ln.label), x + 3, chartArea.top + 3);
       }
-    },
-    plugins: {
-      legend: { labels: { color: "#e8eef7" } }
     }
+
+    ctx.restore();
+  },
+};
+Chart.register(vlinesPlugin);
+
+function ensureCharts() {
+  if (spo2Chart && rmsChart) return;
+
+  const ctxS = document.getElementById("canvasSpo2").getContext("2d");
+  const ctxR = document.getElementById("canvasRms").getContext("2d");
+
+  spo2Chart = new Chart(ctxS, {
+    type: "line",
+    data: { datasets: [] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      parsing: false,
+      animation: false,
+      normalized: true,
+      interaction: { mode: "nearest", intersect: false },
+      scales: {
+        x: {
+          type: "time",
+          adapters: { date: luxon.AdapterLuxon },
+          time: { unit: "hour" },
+          ticks: { maxRotation: 0 },
+        },
+        y: {
+          suggestedMin: 70,
+          suggestedMax: 100,
+        },
+      },
+      plugins: {
+        legend: { labels: { color: "#e6edf3" } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const v = ctx.parsed.y;
+              if (v === null || v === undefined || Number.isNaN(v)) return `${ctx.dataset.label}: (null)`;
+              return `${ctx.dataset.label}: ${Number(v).toFixed(1)}`;
+            },
+          },
+        },
+        vlines: { lines: [] },
+      },
+      elements: { point: { radius: 0 } },
+    },
   });
 
-  if (!spo2Chart){
-    const ctx = document.getElementById("spo2Chart").getContext("2d");
-    spo2Chart = new Chart(ctx, { type:"line", data:{datasets:[]}, options: common() });
-    spo2Chart.options.scales.y.suggestedMin = 70;
-    spo2Chart.options.scales.y.suggestedMax = 100;
-  }
-  if (!rmsChart){
-    const ctx2 = document.getElementById("rmsChart").getContext("2d");
-    rmsChart = new Chart(ctx2, { type:"line", data:{datasets:[]}, options: common() });
-    rmsChart.options.scales.y.suggestedMin = 0;
-  }
+  rmsChart = new Chart(ctxR, {
+    type: "line",
+    data: { datasets: [] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      parsing: false,
+      animation: false,
+      normalized: true,
+      interaction: { mode: "nearest", intersect: false },
+      scales: {
+        x: {
+          type: "time",
+          adapters: { date: luxon.AdapterLuxon },
+          time: { unit: "hour" },
+          ticks: { maxRotation: 0 },
+        },
+        y: {
+          suggestedMin: 0,
+        },
+      },
+      plugins: {
+        legend: { labels: { color: "#e6edf3" } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const v = ctx.parsed.y;
+              if (v === null || v === undefined || Number.isNaN(v)) return `${ctx.dataset.label}: (null)`;
+              return `${ctx.dataset.label}: ${Number(v).toFixed(5)}`;
+            },
+          },
+        },
+        vlines: { lines: [] },
+      },
+      elements: { point: { radius: 0 } },
+    },
+  });
 }
 
-async function apiGet(path){
-  const r = await fetch(API_BASE + path, { method:"GET" });
-  if (!r.ok) throw new Error("HTTP " + r.status);
-  return await r.json();
-}
+function buildDatasets() {
+  // Live datasets (today only)
+  const liveSpo2 = {
+    label: "Live SpO2",
+    data: [],
+    borderColor: "#e53935",
+    borderWidth: 2,
+    spanGaps: true,
+  };
+  const liveRms = {
+    label: "Live RMS",
+    data: [],
+    borderColor: "#1e88e5",
+    borderWidth: 2,
+    spanGaps: true,
+  };
 
+  const dsSpo2 = [liveSpo2];
+  const dsRms  = [liveRms];
 
-async function apiGetArrayBuffer(path){
-  const r = await fetch(API_BASE + path, { method:"GET" });
-  if (!r.ok) throw new Error("HTTP " + r.status);
-  return await r.arrayBuffer();
-}
+  for (const isoDay of selectedIsoDays) {
+    const col = colorForDay(isoDay);
 
-function toWavFilename(name){
-  if (!name) return "abnormal.wav";
-  let out = name.replace(/\.(sma|adpcm|bin)$/i, ".wav");
-  if (!out.toLowerCase().endsWith(".wav")) out = out + ".wav";
-  return out;
-}
+    const spo2 = {
+      label: `SpO2 ${isoToDisplay(isoDay)}`,
+      data: [],
+      borderColor: col.spo2,
+      borderWidth: 2,
+      spanGaps: true,
+    };
+    const rms = {
+      label: `RMS ${isoToDisplay(isoDay)}`,
+      data: [],
+      borderColor: col.rms,
+      borderWidth: 2,
+      spanGaps: true,
+    };
 
-function isRiffWav(u8){
-  if (u8.length < 12) return false;
-  return u8[0]===0x52 && u8[1]===0x49 && u8[2]===0x46 && u8[3]===0x46 && // RIFF
-         u8[8]===0x57 && u8[9]===0x41 && u8[10]===0x56 && u8[11]===0x45;   // WAVE
-}
+    const rows = daysData?.[isoDay] || [];
+    for (const p of rows) {
+      const x = Number(p.ts) * 1000;
+      if (p.spo2 !== null && p.spo2 !== undefined) spo2.data.push({ x, y: Number(p.spo2) });
+      if (p.rms  !== null && p.rms  !== undefined) rms.data.push({ x, y: Number(p.rms)  });
 
-// IMA-ADPCM tables (must match ESP32 encoder)
-const IMA_STEP_TABLE = [
-  7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,
-  97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,
-  724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,2499,2749,3024,3327,
-  3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,10442,11487,12635,13899,
-  15289,16818,18500,20350,22385,24623,27086,29794,32767
-];
-const IMA_INDEX_TABLE = [-1,-1,-1,-1, 2,4,6,8, -1,-1,-1,-1, 2,4,6,8];
-
-function clamp16(v){
-  if (v > 32767) return 32767;
-  if (v < -32768) return -32768;
-  return v|0;
-}
-
-function decodeImaNibble(code, state){
-  // state: { predictor, index }
-  let step = IMA_STEP_TABLE[state.index];
-  let diff = step >> 3;
-  if (code & 1) diff += step >> 2;
-  if (code & 2) diff += step >> 1;
-  if (code & 4) diff += step;
-
-  if (code & 8) state.predictor -= diff;
-  else state.predictor += diff;
-  state.predictor = clamp16(state.predictor);
-
-  state.index += IMA_INDEX_TABLE[code & 0x0F];
-  if (state.index < 0) state.index = 0;
-  if (state.index > 88) state.index = 88;
-
-  return state.predictor;
-}
-
-function sma1DecodeToPcm16(arrayBuffer){
-  const u8 = new Uint8Array(arrayBuffer);
-  if (u8.length < 64) return null;
-
-  // "SMA1"
-  if (!(u8[0]===0x53 && u8[1]===0x4D && u8[2]===0x41 && u8[3]===0x31)) return null;
-
-  const dv = new DataView(arrayBuffer);
-  const headerSize = dv.getUint32(4, true);
-  const sampleRate = dv.getUint32(8, true);
-  const blockSamples = dv.getUint32(12, true);
-  const totalSamples = dv.getUint32(16, true);
-  const startEpoch = dv.getUint32(20, true);
-  const dataBytes = dv.getUint32(24, true);
-
-  const blockBytes = 4 + (blockSamples / 2); // matches ESP: predictor(2)+index(1)+res(1)+payload
-  let off = headerSize;
-  const maxDataEnd = Math.min(u8.length, headerSize + dataBytes);
-
-  const out = new Int16Array(totalSamples);
-  let outPos = 0;
-
-  while (off + 4 <= maxDataEnd && outPos < totalSamples){
-    const predictor = new DataView(arrayBuffer, off, 2).getInt16(0, true);
-    const index = u8[off+2] & 0xFF;
-    // off+3 reserved
-    off += 4;
-
-    const state = { predictor, index: Math.min(88, index) };
-    // first sample of block
-    out[outPos++] = state.predictor;
-
-    const nibblesNeeded = Math.min(blockSamples - 1, totalSamples - outPos);
-    // read bytes containing packed nibbles
-    const bytesNeeded = Math.ceil(nibblesNeeded / 2);
-    const payloadEnd = Math.min(maxDataEnd, off + (blockBytes - 4));
-    const payloadAvail = Math.max(0, payloadEnd - off);
-    const bytesToRead = Math.min(bytesNeeded, payloadAvail);
-
-    for (let bi = 0; bi < bytesToRead && outPos < totalSamples; bi++){
-      const b = u8[off + bi];
-      // low nibble then high nibble (matches encoder packing)
-      const lo = b & 0x0F;
-      out[outPos++] = decodeImaNibble(lo, state);
-      if (outPos >= totalSamples) break;
-      if ((bi*2 + 1) >= nibblesNeeded) break;
-      const hi = (b >> 4) & 0x0F;
-      out[outPos++] = decodeImaNibble(hi, state);
+      // feed live if today
+      const todayIso = DateTime.now().setZone(ZONE).toFormat("yyyy-LL-dd");
+      if (isoDay === todayIso) {
+        if (p.spo2 !== null && p.spo2 !== undefined) liveSpo2.data.push({ x, y: Number(p.spo2) });
+        if (p.rms  !== null && p.rms  !== undefined) liveRms.data.push({ x, y: Number(p.rms)  });
+      }
     }
 
-    // move to next block boundary (fixed size)
-    off = (off - 0) + (blockBytes - 4);
+    dsSpo2.push(spo2);
+    dsRms.push(rms);
   }
 
-  return { pcm: out, sampleRate, startEpoch };
+  spo2Chart.data.datasets = dsSpo2;
+  rmsChart.data.datasets  = dsRms;
 }
 
-function pcm16ToWavBlob(pcm16, sampleRate){
-  const dataBytes = pcm16.length * 2;
-  const header = new ArrayBuffer(44);
-  const dv = new DataView(header);
+function updateAbnLines() {
+  const lines = [];
+  for (const key of abnChecked) {
+    const info = abnRowInfo.get(key);
+    if (!info) continue; // not visible
 
-  function writeFourCC(off, s){
-    dv.setUint8(off+0, s.charCodeAt(0));
-    dv.setUint8(off+1, s.charCodeAt(1));
-    dv.setUint8(off+2, s.charCodeAt(2));
-    dv.setUint8(off+3, s.charCodeAt(3));
+    const c = colorForDay(info.day);
+    lines.push({
+      x: Number(info.ts) * 1000,
+      label: String(info.idx),
+      color: c.base,
+    });
   }
 
-  writeFourCC(0, "RIFF");
-  dv.setUint32(4, 36 + dataBytes, true);
-  writeFourCC(8, "WAVE");
-
-  writeFourCC(12, "fmt ");
-  dv.setUint32(16, 16, true);
-  dv.setUint16(20, 1, true);   // PCM
-  dv.setUint16(22, 1, true);   // mono
-  dv.setUint32(24, sampleRate, true);
-  dv.setUint32(28, sampleRate * 2, true); // byte rate
-  dv.setUint16(32, 2, true);   // block align
-  dv.setUint16(34, 16, true);  // bits
-
-  writeFourCC(36, "data");
-  dv.setUint32(40, dataBytes, true);
-
-  return new Blob([header, pcm16.buffer], { type: "audio/wav" });
+  spo2Chart.options.plugins.vlines.lines = lines;
+  rmsChart.options.plugins.vlines.lines  = lines;
+  spo2Chart.update("none");
+  rmsChart.update("none");
 }
 
-async function getOrDecodeWav(it){
-  const key = it.r2_key || it.key || it.r2Key || it.r2 || "";
-  if (!key) throw new Error("Missing key");
-  if (wavCache.has(key)) return wavCache.get(key);
-
-  const ab = await apiGetArrayBuffer(`/abnormal/get?key=${encodeURIComponent(key)}`);
-  const u8 = new Uint8Array(ab);
-
-  let blob = null;
-  // If already WAV (RIFF), just use it
-  if (isRiffWav(u8)) {
-    blob = new Blob([ab], { type: "audio/wav" });
-  } else {
-    const decoded = sma1DecodeToPcm16(ab);
-    if (decoded && decoded.pcm) {
-      blob = pcm16ToWavBlob(decoded.pcm, decoded.sampleRate || 16000);
-    } else {
-      // Unknown; still make a blob so user can download/open
-      blob = new Blob([ab], { type: "application/octet-stream" });
-    }
+// ====== DATE SELECTOR ======
+function buildDateSelector() {
+  const now = DateTime.now().setZone(ZONE).startOf("day");
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = now.minus({ days: i });
+    days.push({
+      iso: d.toFormat("yyyy-LL-dd"),
+      display: toDisplayDate(d),
+      idx: i,
+    });
   }
 
-  const url = URL.createObjectURL(blob);
-  const entry = { url, blob, key };
-  wavCache.set(key, entry);
-  return entry;
-}
-function stopLive(){
-  if (liveTimer){ clearInterval(liveTimer); liveTimer = null; }
-  setLivePill(false);
-}
+  // Default: today only
+  selectedDates = [days[0].display];
+  selectedIsoDays = [days[0].iso];
 
-function canLive(){
-  const today = hanoiTodayStr();
-  return selectedDates.length === 1 && selectedDates[0] === today;
-}
-
-function updateModeNote(){
-  if (selectedDates.length === 0){
-    modeNote.textContent = "Chọn 1 ngày để xem lịch sử, hoặc chọn hôm nay để bật Live.";
-  } else if (selectedDates.length === 1){
-    if (canLive()){
-      modeNote.textContent = "Bạn có thể bật Live để xem dữ liệu trực tiếp (1s/điểm).";
-    } else {
-      modeNote.textContent = "Đang xem lịch sử theo ngày đã chọn (Live không áp dụng).";
-    }
-  } else {
-    modeNote.textContent = "Đang so sánh nhiều ngày (Live bị tắt).";
-  }
-}
-
-function renderDateSelector(){
-  const dates = last7Dates();
-  const today = hanoiTodayStr();
-
-  dateBox.innerHTML = "";
-  dates.forEach(d => {
+  elDateBox.innerHTML = "";
+  for (const d of days) {
     const chip = document.createElement("label");
     chip.className = "datechip";
-    chip.style.setProperty("--day-color", colorForDay(d));
+    chip.style.setProperty("--day-color", DAY_COLORS[d.idx] || DAY_COLORS[6]);
+
     const cb = document.createElement("input");
     cb.type = "checkbox";
-    cb.checked = selectedDates.includes(d);
-    cb.addEventListener("change", () => {
-      if (cb.checked){
-        selectedDates.push(d);
-      } else {
-        selectedDates = selectedDates.filter(x => x !== d);
-      }
-
-      selectedDates.sort((a,b)=> (a<b?1:-1));
-
-      if (selectedDates.length !== 1 || !canLive()){
-        liveToggle.checked = false;
-        stopLive();
-      }
-
-      updateModeNote();
-      // Abnormal list luôn lọc theo ngày đang chọn
-      renderAbnFiltered();
-      loadSelected();
-    });
+    cb.checked = d.idx === 0;
+    cb.dataset.iso = d.iso;
+    cb.dataset.display = d.display;
 
     const span = document.createElement("span");
-    const dDisp = fmtDayDisp(d);
-    span.textContent = (d === today) ? (dDisp + " (Hôm nay)") : dDisp;
+    span.textContent = d.display;
 
     chip.appendChild(cb);
     chip.appendChild(span);
-    dateBox.appendChild(chip);
-  });
+    elDateBox.appendChild(chip);
 
-  updateModeNote();
-}
+    cb.addEventListener("change", () => {
+      const all = [...elDateBox.querySelectorAll("input[type=checkbox]")];
+      const picked = all.filter((x) => x.checked).map((x) => ({ iso: x.dataset.iso, display: x.dataset.display }));
+      if (!picked.length) {
+        cb.checked = true;
+        return;
+      }
 
-function setDayLabels(){
-  const label = selectionLabel();
-  spo2DayLabel.textContent = label;
-  rmsDayLabel.textContent  = label;
-}
+      // keep original ordering: newest -> oldest by selector order
+      const order = new Map(days.map((x, i) => [x.iso, i]));
+      picked.sort((a, b) => (order.get(a.iso) ?? 99) - (order.get(b.iso) ?? 99));
 
-const DAY_COLORS_BY_OFFSET = [
-  "#e53935", // hôm nay / live: đỏ
-  "#43a047", // hôm qua: xanh lá
-  "#1e88e5", // 2 ngày trước: xanh dương
-  "#fdd835", // 3 ngày trước: vàng
-  "#8e24aa", // 4 ngày trước: tím
-  "#fb8c00", // 5 ngày trước: cam
-  "#d81b60"  // 6 ngày trước: hồng
-];
+      selectedDates = picked.map((x) => x.display);
+      selectedIsoDays = picked.map((x) => x.iso);
 
-function colorForDay(dayIso){
-  // dayIso: YYYY-MM-DD
-  const today = DateTime.now().setZone(TZ).startOf("day");
-  const d = DateTime.fromISO(dayIso).startOf("day");
-  const diff = Math.round(today.diff(d, "days").days); // 0..6 trong phạm vi 7 ngày gần nhất
-  if (diff >= 0 && diff < DAY_COLORS_BY_OFFSET.length){
-    return DAY_COLORS_BY_OFFSET[diff];
-  }
-  // fallback (ngoài phạm vi)
-  return "#90a4ae";
-}
-
-function datasetsFromDays(daysObj, field, unitLabel){
-  const datasets = [];
-  selectedDates.forEach((d, idx) => {
-    const arr = daysObj[d] || [];
-    const data = arr
-      .filter(p => p[field] !== null && p[field] !== undefined)
-      .map(p => ({ x: p.ts * 1000, y: p[field] }));
-
-    const color = colorForDay(d);
-
-    datasets.push({
-      label: fmtDayDisp(d) + " " + unitLabel,
-      data,
-      pointRadius: 0,
-      borderWidth: 2,
-      borderColor: color,
-      tension: 0.15
+      loadSelected().catch(() => {});
+      renderAbnTable();
+      updateAbnLines();
     });
-  });
-  return datasets;
-}
-
-async function loadSelected(){
-  ensureCharts();
-  setDayLabels();
-
-  if (selectedDates.length === 0){
-    spo2Chart.data.datasets = [];
-    rmsChart.data.datasets = [];
-    spo2Chart.update();
-    rmsChart.update();
-    return;
-  }
-
-  try{
-    const q = encodeURIComponent(selectedDates.join(","));
-    const res = await apiGet(`/telemetry/days?dates=${q}`);
-    setConn(true);
-
-    spo2Chart.data.datasets = datasetsFromDays(res.days, "spo2", "(%)");
-    rmsChart.data.datasets  = datasetsFromDays(res.days, "rms", "(RMS)");
-
-    spo2Chart.update();
-    rmsChart.update();
-  }catch(e){
-    setConn(false);
-    console.error(e);
   }
 }
 
-async function loadTodayThenLive(){
-  const today = hanoiTodayStr();
-  selectedDates = [today];
-  renderDateSelector();
-  await loadSelected();
+// ====== FETCH + RENDER ======
+async function loadLatest() {
+  try {
+    const j = await fetchJson(`${API_BASE}/telemetry/latest`);
+    latestPoint = j.point || null;
 
-  lastLiveTs = 0;
-  stopLive();
-  liveTimer = setInterval(async () => {
-    try{
-      const res = await apiGet("/telemetry/latest");
-      setConn(true);
-      const p = res.point;
-      if (!p) return;
-
-      if (p.ts && p.ts <= lastLiveTs) return;
-      lastLiveTs = p.ts;
-
-      if (spo2Chart.data.datasets.length === 0){
-        await loadSelected();
-      }
-      const dsSpo2 = spo2Chart.data.datasets[0];
-      const dsRms  = rmsChart.data.datasets[0];
-      if (!dsSpo2 || !dsRms) return;
-
-      if (p.spo2 !== null && p.spo2 !== undefined){
-        dsSpo2.data.push({ x: p.ts * 1000, y: p.spo2 });
-      }
-      if (p.rms !== null && p.rms !== undefined){
-        dsRms.data.push({ x: p.ts * 1000, y: p.rms });
-      }
-
-      const cutoff = Date.now() - 6 * 3600 * 1000;
-      dsSpo2.data = dsSpo2.data.filter(pt => pt.x >= cutoff);
-      dsRms.data  = dsRms.data.filter(pt => pt.x >= cutoff);
-
-      spo2Chart.update("none");
-      rmsChart.update("none");
-    }catch(e){
-      setConn(false);
-    }
-  }, 1000);
-
-  setLivePill(true);
-}
-
-liveToggle.addEventListener("change", async () => {
-  if (liveToggle.checked){
-    if (!canLive()){
-      liveToggle.checked = false;
-      alert("Muốn bật Live: chỉ chọn đúng 1 ngày và phải là hôm nay (Hà Nội).");
+    if (!latestPoint) {
+      elLastTs.textContent = "-";
+      elSpo2Val.textContent = "-";
+      elRmsVal.textContent = "-";
+      elAlarmVal.textContent = "-";
       return;
     }
-    await loadTodayThenLive();
-  } else {
-    stopLive();
-    await loadSelected();
+
+    const dt = DateTime.fromSeconds(Number(latestPoint.ts), { zone: ZONE });
+    elLastTs.textContent = dt.isValid ? dt.toFormat("dd-LL-yyyy HH:mm:ss") : String(latestPoint.ts);
+    elSpo2Val.textContent = latestPoint.spo2 === null ? "-" : Number(latestPoint.spo2).toFixed(1);
+    elRmsVal.textContent  = latestPoint.rms  === null ? "-" : Number(latestPoint.rms).toFixed(5);
+    elAlarmVal.textContent = latestPoint.alarmA ? "ALARM" : "OK";
+  } catch (e) {
+    console.warn("latest fail", e);
   }
-});
-
-reloadBtn.addEventListener("click", async () => {
-  stopLive();
-  await loadSelected();
-});
-
-// Abnormal list
-function fmtHanoi(ts){
-  return DateTime.fromSeconds(ts).setZone(TZ).toFormat("dd-LL-yyyy HH:mm:ss");
 }
 
-function renderAbn(items){
-  abnList.innerHTML = "";
-  if (!items || items.length === 0){
-    abnList.textContent = "Không có file abnormal trong khoảng thời gian đã chọn.";
+async function loadSelected() {
+  if (!selectedIsoDays.length) return;
+
+  setStatus("Đang tải dữ liệu...");
+
+  try {
+    const qs = encodeURIComponent(selectedIsoDays.join(","));
+    const j = await fetchJson(`${API_BASE}/telemetry/days?dates=${qs}`);
+    daysData = j.days || {};
+
+    ensureCharts();
+    buildDatasets();
+
+    spo2Chart.update("none");
+    rmsChart.update("none");
+
+    setStatus("OK");
+  } catch (e) {
+    console.error(e);
+    setStatus("Không tải được dữ liệu (check API_BASE / CORS / Worker)");
+  }
+}
+
+async function loadAbn() {
+  try {
+    const j = await fetchJson(`${API_BASE}/abnormal/list?days=7`);
+    abnAllItems = Array.isArray(j.items) ? j.items : [];
+  } catch (e) {
+    console.warn("abnormal list fail", e);
+    abnAllItems = [];
+  }
+}
+
+function renderAbnTable() {
+  if (!elAbnList) return;
+
+  // Build visible list
+  const visible = [];
+  const isoSet = new Set(selectedIsoDays);
+
+  for (const it of abnAllItems) {
+    const ts = Number(it.ts);
+    if (!Number.isFinite(ts) || ts <= 0) continue;
+
+    const day = it.day || DateTime.fromSeconds(ts, { zone: ZONE }).toFormat("yyyy-LL-dd");
+    if (!isoSet.has(day)) continue;
+
+    const key = it.key || `${day}/${ts}/${it.filename || "unknown"}`;
+    const filename = it.filename || "unknown";
+    visible.push({ key, ts, day, filename });
+  }
+
+  // Sort ascending for readable sequence (so indices match timeline)
+  visible.sort((a, b) => a.ts - b.ts);
+
+  abnRowInfo.clear();
+  abnVisibleKeys = visible.map((x) => x.key);
+
+  if (!visible.length) {
+    elAbnList.innerHTML = `<div class="note">Không có Abnormal trong các ngày đang chọn.</div>`;
+    // Remove lines that are no longer visible
+    updateAbnLines();
     return;
   }
 
-  items.forEach(it => {
-    const div = document.createElement("div");
-    div.className = "item";
+  // Build table with day grouping rows
+  let html = "";
+  html += `<div class="abnTop">`;
+  html += `<div class="sub">Bảng Abnormal (tên file segment 30s được gắn nhãn Abnormal khi đóng segment).</div>`;
+  html += `<label class="abnControls">Chọn tất cả <input id="abnAllToggle" type="checkbox"></label>`;
+  html += `</div>`;
 
-    const left = document.createElement("div");
-    const title = document.createElement("div");
-    title.innerHTML = `<strong>${it.filename}</strong>`;
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = `${fmtHanoi(it.ts)} • ${(it.size_bytes/1024).toFixed(1)} KB`;
-    left.appendChild(title);
-    left.appendChild(meta);
+  html += `<table class="abnTable">`;
+  html += `<thead><tr><th style="width:64px">#</th><th>Tên file</th><th style="width:120px">Chọn</th></tr></thead>`;
+  html += `<tbody>`;
 
-    const right = document.createElement("div");
-    right.style.display = "flex";
-    right.style.gap = "10px";
-    right.style.alignItems = "center";
-    right.style.flexWrap = "wrap";
-    right.style.justifyContent = "flex-end";
+  let idx = 1;
+  let curDay = null;
+  const dayKeys = new Map(); // day -> [keys]
 
-    const key = it.r2_key || it.key || it.r2Key || it.r2 || "";
+  for (const row of visible) {
+    if (!dayKeys.has(row.day)) dayKeys.set(row.day, []);
+    dayKeys.get(row.day).push(row.key);
 
-    const rawLink = document.createElement("a");
-    rawLink.href = API_BASE + "/abnormal/get?key=" + encodeURIComponent(key);
-    rawLink.target = "_blank";
-    rawLink.textContent = "File gốc";
-
-    const playBtn = document.createElement("button");
-    playBtn.textContent = "Giải mã & Play";
-
-    const dlBtn = document.createElement("button");
-    dlBtn.textContent = "Tải WAV";
-    dlBtn.disabled = true;
-
-    const audio = document.createElement("audio");
-    audio.controls = true;
-    audio.preload = "none";
-    audio.style.width = "260px";
-
-    const status = document.createElement("span");
-    status.className = "meta";
-    status.style.marginLeft = "6px";
-    status.textContent = "";
-
-    async function ensureDecoded(){
-      status.textContent = "Đang giải mã…";
-      try{
-        const entry = await getOrDecodeWav(it);
-        // If blob isn't wav, still allow open raw
-        if (entry.blob.type === "audio/wav"){
-          audio.src = entry.url;
-          dlBtn.disabled = false;
-          status.textContent = "OK";
-        } else {
-          status.textContent = "Không nhận dạng được SMA1/WAV";
-        }
-        setConn(true);
-        return entry;
-      }catch(e){
-        console.error(e);
-        setConn(false);
-        status.textContent = "Lỗi tải/giải mã";
-        throw e;
-      }
+    if (row.day !== curDay) {
+      curDay = row.day;
+      const c = colorForDay(curDay);
+      html += `<tr class="abnDayRow"><td colspan="3">`;
+      html += `<div class="abnDayHeader">`;
+      html += `<div class="abnDayLeft"><span class="swatch" style="--day-color:${c.base}"></span><span>${isoToDisplay(curDay)}</span></div>`;
+      html += `<label class="abnControls">Chọn tất cả <input class="abnDayToggle" data-day="${curDay}" type="checkbox"></label>`;
+      html += `</div>`;
+      html += `</td></tr>`;
     }
 
-    playBtn.addEventListener("click", async () => {
-      try{
-        await ensureDecoded();
-        if (audio.src) await audio.play();
-      }catch(_){}
-    });
+    abnRowInfo.set(row.key, { ts: row.ts, day: row.day, idx });
+    const checked = abnChecked.has(row.key) ? "checked" : "";
+    const t = fmtTimeFromTs(row.ts);
 
-    dlBtn.addEventListener("click", async () => {
-      try{
-        const entry = wavCache.get(key) || await ensureDecoded();
-        if (!entry || !entry.url) return;
-        const a = document.createElement("a");
-        a.href = entry.url;
-        a.download = (it.filename || "abnormal").replace(/\.[^.]+$/,"") + ".wav";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }catch(_){}
-    });
+    html += `<tr>`;
+    html += `<td class="abnIdx">${idx}</td>`;
+    html += `<td class="abnFile">${row.filename}<div class="meta">${isoToDisplay(row.day)} ${t}</div></td>`;
+    html += `<td><input class="abnRowToggle" data-key="${row.key}" type="checkbox" ${checked}></td>`;
+    html += `</tr>`;
 
-    right.appendChild(rawLink);
-    right.appendChild(playBtn);
-    right.appendChild(dlBtn);
-    right.appendChild(audio);
-    right.appendChild(status);
-
-    div.appendChild(left);
-    div.appendChild(right);
-    abnList.appendChild(div);
-  });
-}
-
-function dayIsoFromTs(ts){
-  try{
-    return DateTime.fromSeconds(ts).setZone(TZ).toISODate();
-  }catch(_){
-    return "";
+    idx++;
   }
-}
 
-function renderAbnFiltered(){
-  const pick = new Set(selectedDates);
-  const items = (abnAllItems || []).filter(it => pick.has(dayIsoFromTs(it.ts)));
-  renderAbn(items);
-}
+  html += `</tbody></table>`;
 
-async function loadAbn(){
-  try{
-    const res = await apiGet(`/abnormal/list?days=7`);
-    setConn(true);
-    abnAllItems = res.items || [];
-    renderAbnFiltered();
-  }catch(e){
-    setConn(false);
-    abnList.textContent = "Lỗi tải danh sách abnormal.";
+  elAbnList.innerHTML = html;
+
+  // Wire events
+  const allToggle = document.getElementById("abnAllToggle");
+  if (allToggle) {
+    allToggle.checked = abnVisibleKeys.length > 0 && abnVisibleKeys.every((k) => abnChecked.has(k));
+    allToggle.addEventListener("change", () => {
+      if (allToggle.checked) {
+        for (const k of abnVisibleKeys) abnChecked.add(k);
+      } else {
+        for (const k of abnVisibleKeys) abnChecked.delete(k);
+      }
+      syncAbnCheckboxes();
+      updateAbnLines();
+    });
   }
+
+  const dayToggles = [...elAbnList.querySelectorAll(".abnDayToggle")];
+  for (const dcb of dayToggles) {
+    const day = dcb.dataset.day;
+    const keys = dayKeys.get(day) || [];
+    dcb.checked = keys.length > 0 && keys.every((k) => abnChecked.has(k));
+    dcb.addEventListener("change", () => {
+      if (dcb.checked) {
+        for (const k of keys) abnChecked.add(k);
+      } else {
+        for (const k of keys) abnChecked.delete(k);
+      }
+      syncAbnCheckboxes();
+      updateAbnLines();
+    });
+  }
+
+  const rowToggles = [...elAbnList.querySelectorAll(".abnRowToggle")];
+  for (const cb of rowToggles) {
+    const key = cb.dataset.key;
+    cb.addEventListener("change", () => {
+      if (cb.checked) abnChecked.add(key);
+      else abnChecked.delete(key);
+
+      // Update group/global toggles states
+      if (allToggle) allToggle.checked = abnVisibleKeys.every((k) => abnChecked.has(k));
+      for (const dcb of dayToggles) {
+        const day = dcb.dataset.day;
+        const keys = dayKeys.get(day) || [];
+        dcb.checked = keys.length > 0 && keys.every((k) => abnChecked.has(k));
+      }
+
+      updateAbnLines();
+    });
+  }
+
+  updateAbnLines();
 }
 
-// init
-(async function init(){
+function syncAbnCheckboxes() {
+  // Visible rows
+  for (const cb of elAbnList.querySelectorAll(".abnRowToggle")) {
+    const key = cb.dataset.key;
+    cb.checked = abnChecked.has(key);
+  }
+
+  // Global toggle
+  const allToggle = document.getElementById("abnAllToggle");
+  if (allToggle) allToggle.checked = abnVisibleKeys.length > 0 && abnVisibleKeys.every((k) => abnChecked.has(k));
+}
+
+// ====== INIT ======
+async function init() {
+  buildDateSelector();
   ensureCharts();
 
-  selectedDates = [hanoiTodayStr()];
-  renderDateSelector();
+  await loadLatest();
   await loadSelected();
+
   await loadAbn();
-})();
+  renderAbnTable();
+
+  if (elBtnRef) {
+    elBtnRef.addEventListener("click", async () => {
+      await loadLatest();
+      await loadSelected();
+      await loadAbn();
+      renderAbnTable();
+    });
+  }
+
+  // periodic refresh for live widgets (no heavy re-fetch)
+  setInterval(() => loadLatest().catch(() => {}), 4000);
+}
+
+init();

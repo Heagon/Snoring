@@ -1,18 +1,19 @@
 name = "sleepmon-api"
-main = "src/index.ts"
-compatibility_date = "2025-04-01"
-workers_dev = true
+main = "worker.js"
+compatibility_date = "2025-12-01"
 
-# Cron cleanup every 6 hours
-[triggers]
-crons = ["0 */6 * * *"]
-
-# === Bindings (fill database_id after `wrangler d1 list`) ===
+# D1 database binding
 [[d1_databases]]
 binding = "DB"
-database_name = "sleepmon-db"
-database_id = "a112f28f-3391-499b-943a-5e498012142c"
+database_name = "sleepmon_db"
+database_id = "PUT_YOUR_D1_ID_HERE"
 
+# R2 bucket binding
 [[r2_buckets]]
-binding = "AUDIO"
-bucket_name = "sleepmon-audio"
+binding = "R2"
+bucket_name = "sleepmon-abnormal"
+# preview_bucket_name = "sleepmon-abnormal-preview"
+
+[vars]
+# Set in Cloudflare dashboard or via `wrangler secret put AUTH_TOKEN`
+# AUTH_TOKEN = "..."

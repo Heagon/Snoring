@@ -118,3 +118,22 @@ code{background:#0e1522; border:1px solid var(--line); padding:2px 6px; border-r
 /* Day color indicator under each date chip */
 .datechip{position:relative; padding-bottom:12px;}
 .datechip::after{content:""; position:absolute; left:10px; right:10px; bottom:4px; height:4px; border-radius:4px; background: var(--day-color, transparent); opacity:0.95;}
+
+/* Abnormal table */
+.abn{margin-top:10px;}
+.abnTop{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:10px;}
+.abnTop .abnControls{margin-left:auto;}
+.abnTable{width:100%; border-collapse:separate; border-spacing:0; margin-top:10px; overflow:hidden; border:1px solid var(--line); border-radius:12px;}
+.abnTable thead th{background: rgba(14,21,34,0.7);}
+.abnTable th, .abnTable td{border-bottom:1px solid var(--line); padding:10px; font-size:13px;}
+.abnTable th{color:var(--muted); font-weight:700; text-align:left;}
+.abnTable tbody tr:last-child td{border-bottom:none;}
+.abnTable tbody tr:hover td{background: rgba(255,255,255,0.02);}
+.abnDayRow td{background: rgba(0,0,0,0.18); font-weight:800;}
+.abnDayHeader{display:flex; align-items:center; justify-content:space-between; gap:12px;}
+.abnDayLeft{display:flex; align-items:center; gap:10px;}
+.swatch{width:12px; height:12px; border-radius:999px; display:inline-block; background: var(--day-color, #90a4ae);}
+.abnControls{display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; white-space:nowrap;}
+.abnControls input{transform: scale(1.1);}
+.abnIdx{width:56px; color:var(--muted);}
+.abnFile{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px;}
