@@ -6,7 +6,7 @@
 const { DateTime } = luxon;
 
 // ===== CHANGE THIS =====
-const API_BASE = "https://sleepmon-api.sleepmon.workers.dev";
+const API_BASE = "https://sleepmon-api.YOURNAME.workers.dev";
 
 // UI refs
 const connPill = document.getElementById("connPill");
@@ -418,21 +418,36 @@ function colorForDay(dayIso){
 
 function datasetsFromDays(daysObj, field, unitLabel){
   const datasets = [];
-  selectedDates.forEach((d, idx) => {
-    const arr = daysObj[d] || [];
-    const data = arr
-      .filter(p => p[field] !== null && p[field] !== undefined)
-      .map(p => ({ x: p.ts * 1000, y: p[field] }));
+
+  // Telemetry is expected to arrive roughly once per second.
+  // If there's a gap (device offline / WiFi drop / reboot...), break the line
+  // by inserting a single null point right after the last seen timestamp.
+  const GAP_BREAK_SEC = 3;
+
+  selectedDates.forEach((d) => {
+    const arr = (daysObj[d] || []).slice().sort((a,b) => a.ts - b.ts);
+
+    const out = [];
+    let lastTs = null;
+    for (const p of arr){
+      if (lastTs !== null && (p.ts - lastTs) > GAP_BREAK_SEC){
+        // Insert a null point to force a visual break.
+        out.push({ x: (lastTs + 1) * 1000, y: null });
+      }
+      out.push({ x: p.ts * 1000, y: (p[field] === undefined ? null : p[field]) });
+      lastTs = p.ts;
+    }
 
     const color = colorForDay(d);
 
     datasets.push({
       label: fmtDayDisp(d) + " " + unitLabel,
-      data,
+      data: out,
       pointRadius: 0,
       borderWidth: 2,
       borderColor: color,
-      tension: 0.15
+      tension: 0.15,
+      spanGaps: false
     });
   });
   return datasets;
@@ -572,9 +587,9 @@ function setAbnMarkersFromSelection(){
     const it = abnVisibleItems[i];
     const k = abnKey(it);
     if (!abnSelectedKeys.has(k)) continue;
-    const day = it.day || dayIsoFromTs(it.ts||0);
-    const color = colorForDay(day);
-    markers.push({ x: (it.ts * 1000), label: String(i + 1), color });
+    // Marker line style requirement: dashed WHITE line.
+    // Keep x in **epoch seconds** (plugin multiplies by 1000 for Chart.js time scale).
+    markers.push({ x: it.ts, label: String(i + 1), color: "#fff" });
   }
   spo2Chart.options.plugins.abnMarkers.markers = markers;
   rmsChart.options.plugins.abnMarkers.markers = markers;
@@ -590,7 +605,7 @@ function renderAbnTable(items){
   if (abnEmpty) abnEmpty.textContent = "";
 
   if (!abnVisibleItems.length) {
-    if (abnEmpty) abnEmpty.textContent = "Không có mốc Abnormal trong ngày/khoảng đã chọn.";
+    if (abnEmpty) abnEmpty.textContent = "Không có mốc ngưng thở trong ngày đã chọn.";
     updateAbnCheckAllState();
     setAbnMarkersFromSelection();
     return;
@@ -610,9 +625,9 @@ function renderAbnTable(items){
     file.textContent = it.filename || "(no name)";
     const meta = document.createElement("div");
     meta.className = "abnMeta";
-    const tm = DateTime.fromSeconds(it.ts).setZone(TZ).toFormat("dd-LL-yyyy HH:mm:ss");
+    const tm = DateTime.fromSeconds(it.ts).setZone(TZ).toFormat("HH:mm:ss");
     const day = it.day || dayIsoFromTs(it.ts||0);
-    meta.textContent = ` ()`;
+    meta.textContent = `${tm} (${day})`;
     tdName.appendChild(file);
     tdName.appendChild(meta);
 
@@ -637,9 +652,21 @@ function renderAbnTable(items){
 
 function renderAbnFiltered(){
   const pick = new Set(selectedDates);
+  // For the apnea-marker list, only allow filtering by ONE day (to avoid confusion).
+  if (pick.size !== 1) {
+    if (abnTbody) abnTbody.innerHTML = "";
+    abnVisibleItems = [];
+    abnSelectedKeys.clear();
+    if (abnCheckAll) abnCheckAll.checked = false;
+    if (abnEmpty) abnEmpty.textContent = "Để lọc và đánh dấu mốc ngưng thở, hãy chọn đúng 1 ngày ở phía trên.";
+    setAbnMarkersFromSelection();
+    return;
+  }
+
+  const [dayOnly] = Array.from(pick);
   const items = (abnAllItems || [])
     .map(it => ({ ...it, day: it.day || dayIsoFromTs(it.ts||0) }))
-    .filter(it => pick.has(it.day))
+    .filter(it => it.day === dayOnly)
     .sort((a, b) => (a.ts || 0) - (b.ts || 0));
   renderAbnTable(items);
 }
@@ -655,7 +682,7 @@ async function loadAbn(){
     setConn(false);
     abnAllItems = [];
     if (abnTbody) abnTbody.innerHTML = "";
-    if (abnEmpty) abnEmpty.textContent = "Lỗi tải danh sách Abnormal.";
+    if (abnEmpty) abnEmpty.textContent = "Lỗi tải danh sách mốc ngưng thở.";
     setAbnMarkersFromSelection();
   }
 }
