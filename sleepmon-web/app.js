@@ -6,7 +6,7 @@
 const { DateTime } = luxon;
 
 // ===== CHANGE THIS =====
-const API_BASE = "https://sleepmon-api.sleepmon.workers.dev";
+const API_BASE = "https://sleepmon-api.YOURNAME.workers.dev";
 
 // UI refs
 const connPill = document.getElementById("connPill");
