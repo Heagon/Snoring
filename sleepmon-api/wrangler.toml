@@ -16,4 +16,4 @@ bucket_name = "sleepmon-abnormal"
 
 [vars]
 # Set in Cloudflare dashboard or via `wrangler secret put AUTH_TOKEN`
-# AUTH_TOKEN = "..."
+# AUTH_TOKEN = "khongaibietcaimatkhaulagihetbana"
