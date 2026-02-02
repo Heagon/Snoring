@@ -1,4 +1,3 @@
-
 function normalizeTo10Minutes(hhmm) {
   // Accepts "HH:MM". Returns snapped down to 10-minute steps.
   if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return "00:00";
@@ -42,6 +41,7 @@ const rmsDayLabel = document.getElementById("rmsDayLabel");
 const TZ = "Asia/Ho_Chi_Minh";
 const WINDOW_MIN = 10;
 const DAY_COLOR = "#e53935";
+const RMS_COLOR = "#3b82f6";
 
 let spo2Chart, rmsChart;
 let liveTimer = null;
@@ -234,7 +234,7 @@ function applyWindowToCharts(points, startMs, endMs) {
   rmsChart.options.scales.x.max = endMs;
 
   spo2Chart.data.datasets = [buildDataset(points, "spo2", "SpO2 (%)", DAY_COLOR, startMs, endMs)];
-  rmsChart.data.datasets = [buildDataset(points, "rms", "RMS", DAY_COLOR, startMs, endMs)];
+  rmsChart.data.datasets = [buildDataset(points, "rms", "RMS", RMS_COLOR, startMs, endMs)];
 
   spo2Chart.update();
   rmsChart.update();
@@ -293,7 +293,7 @@ function startLiveRollingWindow() {
     data: [],
     pointRadius: 0,
     borderWidth: 2,
-    borderColor: DAY_COLOR,
+    borderColor: RMS_COLOR,
     tension: 0.15,
     spanGaps: false
   }];
@@ -344,16 +344,26 @@ function startLiveRollingWindow() {
 }
 
 // ===== UI events =====
+
 applyTimeBtn?.addEventListener("click", async () => {
   // Khi áp dụng lịch sử, tự tắt Live
-  liveToggle.checked = false;
+  if (liveToggle) liveToggle.checked = false;
   stopLive();
   await loadTodayAndRenderByTime();
 });
 
-timePick?.addEventListener("change", async () => {
-  if (liveToggle.checked) return; // Live thì bỏ qua
+hourPick?.addEventListener("change", async () => {
+  if (liveToggle?.checked) return;
   await loadTodayAndRenderByTime();
+});
+
+minPick?.addEventListener("change", async () => {
+  if (liveToggle?.checked) return;
+  await loadTodayAndRenderByTime();
+});
+
+  await loadTodayAndRenderByTime();
+});
 });
 
 reloadBtn?.addEventListener("click", async () => {
@@ -377,26 +387,20 @@ liveToggle?.addEventListener("change", async () => {
   }
 });
 
-// ===== INIT =====
-(async function init() {
-  ensureCharts();
-  if (timePick) timePick.value = "00:00";
-  liveToggle.checked = false;
-  stopLive();
-  await loadTodayAndRenderByTime();
-})();
-
 applyTimeBtn.addEventListener("click", async () => {
   stopLive();
   if (liveToggle) liveToggle.checked = false;
   await loadTodayAndRenderByTime();
 });
-
-
-// Init
-initTimePick();
-
-
-document.addEventListener("DOMContentLoaded", () => {
-  initTimePick();
 });
+
+
+// ===== INIT =====
+(async function init() {
+  initTimePick(); // populate hour/min options (00-23, 00-50 step 10)
+  ensureCharts();
+  if (liveToggle) liveToggle.checked = false;
+  stopLive();
+  await loadTodayAndRenderByTime();
+})();
+
