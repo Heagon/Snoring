@@ -1,3 +1,16 @@
+
+function normalizeTo10Minutes(hhmm) {
+  // Accepts "HH:MM". Returns snapped down to 10-minute steps.
+  if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return "00:00";
+  let [h, m] = hhmm.split(":").map((x) => parseInt(x, 10));
+  if (Number.isNaN(h) || Number.isNaN(m)) return "00:00";
+  h = Math.max(0, Math.min(23, h));
+  m = Math.max(0, Math.min(59, m));
+  m = Math.floor(m / 10) * 10; // 0,10,20,30,40,50
+  // latest selectable start time (10-min window)
+  if (h === 23 && m > 50) m = 50;
+  return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+}
 /* SleepMon web (Time window)
    Yêu cầu:
    - Bỏ chọn ngày & bảng ngưng thở

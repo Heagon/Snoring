@@ -156,3 +156,6 @@ code{background:#0e1522; border:1px solid var(--line); padding:2px 6px; border-r
   border-radius:10px;
   padding:8px 10px;
 }
+
+
+.hint{display:block;margin-top:6px;font-size:12px;opacity:.8}
