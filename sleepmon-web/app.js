@@ -176,19 +176,21 @@ function ensureCharts(){
     spo2Chart = new Chart(document.getElementById("spo2Chart"), {
       type: "line",
       data: { datasets: [] },
-      options: baseChartOptions("SpO2 (%)"),
+      // SpO2 luôn nằm trong [0..100] để tránh trục Y bị kéo vô hạn khi dữ liệu lỗi
+      options: baseChartOptions("SpO2 (%)", { min: 0, max: 100 }),
     });
   }
   if (!rmsChart){
     rmsChart = new Chart(document.getElementById("rmsChart"), {
       type: "line",
       data: { datasets: [] },
-      options: baseChartOptions("Audio RMS"),
+      // RMS không được âm; đặt min=0 để tránh kéo trục xuống dưới
+      options: baseChartOptions("Audio RMS", { min: 0 }),
     });
   }
 }
 
-function baseChartOptions(title){
+function baseChartOptions(title, yOverrides = {}){
   return {
     responsive: true,
     maintainAspectRatio: false,
@@ -216,6 +218,7 @@ function baseChartOptions(title){
       y: {
         ticks: { color: "#9db4d6" },
         grid: { color: "rgba(157,180,214,0.15)" },
+        ...yOverrides,
       }
     }
   };
@@ -225,14 +228,22 @@ function buildDataset(points, key, label, color){
   return {
     label,
     data: points
-      .filter(p => p[key] !== null && p[key] !== undefined)
-      .map(p => ({ x: p.ts * 1000, y: p[key] })),
+      .map(p => ({ x: p.ts * 1000, y: sanitizeValue(key, p[key]) }))
+      .filter(p => p.y !== null),
     borderColor: color,
     backgroundColor: "transparent",
     borderWidth: 2,
     pointRadius: 0,
     tension: 0.2,
   };
+}
+
+function sanitizeValue(key, v){
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  if (key === "spo2") return Math.max(0, Math.min(100, n));
+  if (key === "rms")  return Math.max(0, n);
+  return n;
 }
 
 function normalizeDayResponse(res, dateISO){
@@ -379,11 +390,13 @@ async function startLiveBucketedWindow(){
       const dsSpo2 = spo2Chart.data.datasets[0];
       const dsRms  = rmsChart.data.datasets[0];
 
-      if (p.spo2 !== null && p.spo2 !== undefined){
-        dsSpo2.data.push({ x: nowMs, y: p.spo2 });
+      const spo2v = sanitizeValue("spo2", p.spo2);
+      const rmsv  = sanitizeValue("rms",  p.rms);
+      if (spo2v !== null){
+        dsSpo2.data.push({ x: nowMs, y: spo2v });
       }
-      if (p.rms !== null && p.rms !== undefined){
-        dsRms.data.push({ x: nowMs, y: p.rms });
+      if (rmsv !== null){
+        dsRms.data.push({ x: nowMs, y: rmsv });
       }
 
       // trim (đề phòng dữ liệu cũ)
