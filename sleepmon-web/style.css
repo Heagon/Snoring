@@ -33,17 +33,17 @@ body{
   font-size:12px;
   color:var(--muted);
 }
-.container{max-width:1100px; margin:0 auto; padding:16px;}
+.container{max-width:1400px; margin:0 auto; padding:16px;}
 .card{
   background:var(--card);
   border:1px solid var(--line);
   border-radius:14px;
-  padding:14px;
+  padding:16px;
   margin-bottom:14px;
 }
 .grid2{
   display:grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0,1fr) minmax(0,1fr);
   gap:14px;
 }
 @media (max-width: 900px){
@@ -70,11 +70,19 @@ button{cursor:pointer}
 button:hover{border-color:#2e4366}
 .datebox{
   display:flex;
-  flex-wrap:wrap;
-  gap:8px;
+  gap:10px;
   margin-top:10px;
+  overflow-x:auto;
+  padding-bottom:4px;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* mobile: cho phép xuống dòng để dễ bấm */
+@media (max-width: 700px){
+  .datebox{flex-wrap:wrap; overflow-x:visible}
 }
 .datechip{
+  flex:0 0 auto;
   border:1px solid var(--line);
   border-radius:999px;
   padding:7px 10px 14px 10px; /* chừa chỗ cho vạch màu */
@@ -84,6 +92,13 @@ button:hover{border-color:#2e4366}
   gap:8px;
   align-items:center;
   position:relative;
+  background:#0e1727;
+  cursor:pointer;
+}
+
+.datechip.on{
+  border-color:#3b82f6;
+  color:#e8eef7;
 }
 .datechip::after{
   content:"";
@@ -100,6 +115,17 @@ button:hover{border-color:#2e4366}
 .datechip input{transform: scale(1.1);}
 .toggle{display:flex; gap:8px; align-items:center; color:var(--muted); font-size:12px;}
 .chartFooter{color:var(--muted); font-size:12px; margin-top:8px; text-align:center;}
+
+/* Fix: khóa chiều cao vùng biểu đồ để canvas không tự phình ra vô hạn */
+.chartWrap{
+  height: 440px;            /* biểu đồ cao hơn để nhìn rõ */
+  position: relative;
+}
+.chartWrap canvas{
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
 .list{display:flex; flex-direction:column; gap:10px; margin-top:10px;}
 .item{
   padding:10px;
@@ -143,6 +169,7 @@ code{background:#0e1522; border:1px solid var(--line); padding:2px 6px; border-r
 
 /* ===== v6: Time window controls ===== */
 .controls .controls-row{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.controls .controls-row{align-items:center}
 .controls .controls-title{font-weight:700;font-size:16px}
 .controls .controls-sub{opacity:.85;font-size:12px;margin-top:4px}
 .window-note{margin-top:10px;font-size:12px;opacity:.9}
@@ -151,6 +178,7 @@ code{background:#0e1522; border:1px solid var(--line); padding:2px 6px; border-r
 .timePick{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
 .timePickLabel{font-size:12px;opacity:.9}
 .timePickRow{display:flex;align-items:center;gap:8px}
+#applyTimeBtn{font-weight:700}
 .timePick select{
   background:#0e1727;
   color:#e8eef7;
@@ -170,32 +198,3 @@ code{background:#0e1522; border:1px solid var(--line); padding:2px 6px; border-r
 
 /* Button alignment */
 #applyTimeBtn{white-space:nowrap}
-
-
-/* ===== v8 UI: tối ưu biểu đồ + tự cập nhật không cần Live ===== */
-.container{ max-width: 1280px; }
-
-.datebox{
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  padding-bottom: 6px;
-  -webkit-overflow-scrolling: touch;
-}
-.datebox::-webkit-scrollbar{ height: 8px; }
-.datebox::-webkit-scrollbar-thumb{ background: rgba(255,255,255,0.08); border-radius: 999px; }
-@media (max-width: 900px){
-  .datebox{ flex-wrap: wrap; overflow-x: visible; }
-}
-
-.chartWrap{
-  height: 440px;
-  position: relative;
-}
-@media (max-width: 900px){
-  .chartWrap{ height: 360px; }
-}
-.chartWrap canvas{
-  width: 100% !important;
-  height: 100% !important;
-  display: block;
-}
