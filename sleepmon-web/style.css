@@ -84,6 +84,13 @@ button:hover{border-color:#2e4366}
   gap:8px;
   align-items:center;
   position:relative;
+  background:#0e1727;
+  cursor:pointer;
+}
+
+.datechip.on{
+  border-color:#3b82f6;
+  color:#e8eef7;
 }
 .datechip::after{
   content:"";

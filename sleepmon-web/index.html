@@ -15,24 +15,38 @@
 
   <main class="container">
     <section class="card">
-      <div class="row">
-        <div>
-          <div class="h">Chọn ngày (tối đa 7 ngày gần nhất)</div>
-          <div class="sub">Chọn nhiều ngày để so sánh (tự tắt Live).</div>
+      <div class="controls">
+        <div class="controls-row">
+          <div>
+            <div class="controls-title">Lọc ngày (tối đa 7 ngày gần nhất)</div>
+            <div class="controls-sub">Chọn 1 ngày để xem cửa sổ 10 phút theo giờ/phút. Live chỉ hoạt động cho hôm nay.</div>
+          </div>
+
+          <div class="controls-right">
+            <div class="timePick" aria-label="Chọn giờ/phút">
+              <div class="timePickLabel">Chọn thời điểm</div>
+              <div class="timePickRow">
+                <select id="hourPick" aria-label="Giờ"></select>
+                <span class="timeSep">:</span>
+                <select id="minPick" aria-label="Phút"></select>
+                <button id="applyTimeBtn">Áp dụng</button>
+              </div>
+              <div class="timeHint">Mỗi cửa sổ hiển thị 10 phút.</div>
+            </div>
+
+            <label class="liveToggle" title="Hiển thị liên tục theo cửa sổ 10 phút">
+              <input type="checkbox" id="liveToggle" />
+              <span>Live</span>
+            </label>
+
+            <button id="reloadBtn">Tải lại</button>
+          </div>
         </div>
 
-        <div class="row right">
-          <label class="toggle">
-            <input type="checkbox" id="liveToggle" />
-            <span>Live</span>
-          </label>
-
-          <button id="reloadBtn">Tải lại</button>
-        </div>
+        <div id="dateBox" class="datebox" aria-label="Chọn ngày"></div>
+        <div class="note" id="modeNote"></div>
+        <div class="window-note" id="windowNote"></div>
       </div>
-
-      <div id="dateBox" class="datebox"></div>
-      <div class="note" id="modeNote"></div>
     </section>
 
     <section class="grid2">
