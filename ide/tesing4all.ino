@@ -173,8 +173,57 @@ static const bool DBG_PPG_RAW = true;
 
 //  SD PATHS 
 static const char* ROOT_DIR   = "/SleepMon";
-static const char* SUB_SOUND  = "Sound";   // NEW (replaces Normal)
+static const char* SUB_SOUND  = "Sound";
 static const char* SUB_SPO2   = "SpO2";
+
+// Check if SD storage usage is above 90%
+bool checkSDStorage() {
+  uint64_t totalBytes = SD.totalBytes();
+  uint64_t usedBytes = SD.usedBytes();
+  float usage = (float)usedBytes / (float)totalBytes * 100;
+
+  Serial.printf("[SD] Total: %llu MB, Used: %llu MB, Usage: %.2f%%\n", 
+                totalBytes / (1024 * 1024), 
+                usedBytes / (1024 * 1024),
+                usage);
+
+  return (usage >= 90.0);
+}
+
+// Delete old files (older than 3 days)
+void deleteOldFiles() {
+  time_t now = time(nullptr);
+  struct tm tmv;
+  localtime_r(&now, &tmv);
+
+  File dir = SD.open(ROOT_DIR);
+  if (dir && dir.isDirectory()) {
+    dir.rewindDirectory();
+    while (true) {
+      File entry = dir.openNextFile();
+      if (!entry) break;
+
+      String filename = entry.name();
+      if (filename.endsWith(".csv") || filename.endsWith(".wav")) {
+        int year, month, day;
+        sscanf(filename.c_str(), "%d-%d-%d", &day, &month, &year);
+
+        struct tm fileDate = {0};
+        fileDate.tm_year = year - 1900;
+        fileDate.tm_mon = month - 1;
+        fileDate.tm_mday = day;
+
+        time_t fileTime = mktime(&fileDate);
+        if (difftime(now, fileTime) > 3 * 24 * 60 * 60) {
+          Serial.printf("[SD] Deleting old file: %s\n", filename.c_str());
+          SD.remove(entry.name());
+        }
+      }
+      entry.close();
+    }
+  }
+  dir.close();
+}
 
 //  GLOBAL STATE 
 static volatile bool   gSdOk = false;
@@ -327,7 +376,7 @@ static bool timeSync() {
   return false;
 }
 
-//  SD INIT 
+// SD INIT
 static bool sdInit() {
   SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
   const uint32_t hzTry[] = { 1000000, 4000000, 400000 };
@@ -340,6 +389,11 @@ static bool sdInit() {
                     (unsigned long long)(total / (1024ULL*1024ULL)),
                     (unsigned long long)(used  / (1024ULL*1024ULL)));
       SD.mkdir(ROOT_DIR);
+
+      if (checkSDStorage()) {
+        deleteOldFiles();
+      }
+
       return true;
     }
   }
@@ -598,14 +652,14 @@ static void taskSDWorker(void* pv) {
 
       File sf;
       if (sdLock(200)) {
-        sf = SD.open(sp.c_str(), FILE_WRITE); 
+        sf = SD.open(sp.c_str(), FILE_APPEND);
         sdUnlock();
       }
 
       if (sf) {
         if (needHeader) {
           if (sdLock(200)) {
-            sf.print("idx,segment,time,spo2,abnormal\n");
+            sf.print("idx,time,spo2,abnormal\n");
             sdUnlock();
           }
         }
@@ -620,13 +674,9 @@ static void taskSDWorker(void* pv) {
 
           sf.print(gSpo2RowIdx);
           sf.print(',');
-          sf.print(sj.segName);
-          sf.print(',');
           sf.print(hhmmss);
           sf.print(',');
-
           if (sj.spo2[i] >= 0) sf.print(sj.spo2[i]);
-
           sf.print(',');
           if (sj.abn[i]) sf.print('*');
           sf.print('\n');
@@ -636,8 +686,11 @@ static void taskSDWorker(void* pv) {
           if ((i % 5) == 4) vTaskDelay(pdMS_TO_TICKS(1));
         }
 
-        if (sdLock(200)) { sf.flush(); sdUnlock(); }
-        sf.close();
+        if (sdLock(200)) { 
+          sf.flush();
+          sdUnlock();
+        }
+        sf.close(); 
         Serial.printf("[SDW] Spo2 appended: %s\n", sp.c_str());
       }
     }
